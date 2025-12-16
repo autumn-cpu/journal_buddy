@@ -108,8 +108,27 @@ class TestRecommendationLogic(unittest.TestCase):
         # Crucially: Test that the API request was NOT made
         mock_get.assert_not_called()
 
-# ... (rest of the file content is unchanged) ...
 
+
+    # 6. Test Unhandled HTTP 500 Error (The Failing Test) <--- **PASTE IT HERE**
+    @patch('recommendation_logic.requests.get')
+    def test_unhandled_http_error_bug(self, mock_get):
+        """
+        Tests the bug where the function fails to fall back 
+        gracefully on an unhandled HTTP 500 status code.
+        """
+        # Setup: Configure the mock response for an unhandled 500 error
+        mock_response = MagicMock()
+        mock_response.status_code = 500
+        mock_get.return_value = mock_response
+
+        # We assert that the function should still successfully return a fallback list
+        result = get_recommendation_logic("Happy", TEST_API_KEY)
+        
+        # Assertion: If the code is buggy, it might crash or return None/empty list.
+        self.assertLessEqual(len(result['recommendations']), len(FALLBACK_SONGS['happy']))
+        self.assertTrue('API Failed (Status 500)' in result['status'])
+        
 # Final block to ensure tests run and display output
 if __name__ == '__main__':
     print("Attempting to run tests...")
