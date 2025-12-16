@@ -1,6 +1,7 @@
+import logging
 import random
 import requests
-from requests.exceptions import RequestException
+from requests.exceptions import RequestException, HTTPError
 
 # Mood to genre mapping
 MOOD_GENRES = {
@@ -18,29 +19,24 @@ FALLBACK_SONGS = {
     "relaxed": [("Take Five", "Dave Brubeck"), ("Blue in Green", "Miles Davis"), ("River", "Joni Mitchell")]
 }
 
+# python
 def get_recommendation_logic(mood_input: str, api_key: str) -> dict:
-    """
-    Pure function to determine music recommendations based on mood and API availability.
-    Implements normalization and guard clauses.
-    """
-    # 1. Normalization & Guard Clause for Mood (Decision Table Row 4)
+    if not isinstance(mood_input, str) or not mood_input:
+        return {'status': 'Invalid Mood', 'recommendations': random.sample(FALLBACK_SONGS['happy'], 3)}
+
     normalized_mood = mood_input.lower()
     if normalized_mood not in MOOD_GENRES:
-        # Fallback for invalid mood input
-        return {
-            'status': 'Invalid Mood',
-            'recommendations': random.sample(FALLBACK_SONGS['happy'], 3)
-        }
+        return {'status': 'Invalid Mood', 'recommendations': random.sample(FALLBACK_SONGS['happy'], 3)}
 
-    # 2. Guard Clause for API Key
+    songs = FALLBACK_SONGS[normalized_mood]
+    genre = random.choice(MOOD_GENRES[normalized_mood])
+
     if not api_key:
-        # Fallback if API key is missing
-        genre = random.choice(MOOD_GENRES[normalized_mood])
-        songs = FALLBACK_SONGS[normalized_mood]
         return {
             'status': f'API Key Missing. Using Fallback ({genre}).',
             'recommendations': random.sample(songs, min(3, len(songs)))
         }
+    
 
     genre = random.choice(MOOD_GENRES[normalized_mood])
     url = "https://ws.audioscrobbler.com/2.0/"
@@ -54,27 +50,43 @@ def get_recommendation_logic(mood_input: str, api_key: str) -> dict:
 
     try:
         response = requests.get(url, params=params, timeout=5)
-        response.raise_for_status() # Raises an HTTPError for bad responses (4xx or 5xx)
+
+        # Force HTTP errors so tests can catch Status 500
+        if response.status_code != 200:
+            raise HTTPError(response=response)
+
         data = response.json()
+    # Check for tracks found (Decision Table Row 1)
+    if "tracks" in data and "track" in data["tracks"]:
+        tracks = data["tracks"]["track"]
+        if tracks:
+            selected = random.sample(tracks, min(3, len(tracks)))
+            formatted_tracks = [(t['name'], t['artist']['name']) for t in selected]
+            return {
+                'status': f'API Success ({genre}).',
+                'recommendations': formatted_tracks
+            }
 
-        # Check for tracks found (Decision Table Row 1)
-        if "tracks" in data and "track" in data["tracks"]:
-            tracks = data["tracks"]["track"]
-            if tracks:
-                selected = random.sample(tracks, min(3, len(tracks)))
-                formatted_tracks = [(t['name'], t['artist']['name']) for t in selected]
-                return {
-                    'status': f'API Success ({genre}).',
-                    'recommendations': formatted_tracks
-                }
+    # API returned valid JSON but no tracks (Decision Table Row 2)
+    raise ValueError("API returned no usable track data.")
 
-        # API returned valid JSON but no tracks (Decision Table Row 2)
-        raise ValueError("API returned no usable track data.")
 
-    except (RequestException, ValueError, KeyError) as e:
-        # API Failure or data failure (Decision Table Row 3)
-        songs = FALLBACK_SONGS[normalized_mood]
+    # ------------------ 1. CATCH HTTP STATUS ERRORS FIRST ------------------
+    except requests.exceptions.HTTPError as e:
+        code = getattr(e.response, "status_code", "unknown")
+        status = f"API Failed (Status {code}) Using Fallback ({genre})."
         return {
-            'status': f'API Failed ({type(e).__name__}). Using Fallback ({genre}).',
+            'status': status,
+            'recommendations': random.sample(songs, min(3, len(songs)))
+        }
+
+# 2. CATCH ALL OTHER EXCEPTIONS (RequestException, Value Error, Key Error)
+    except (requests.exceptions.RequestException, ValueError, KeyError) as e:
+        songs = FALLBACK_SONGS[normalized_mood]
+        status = f'API Failed ({type(e).__name__}). Using Fallback ({genre}).'
+        logging.warning(f"Connection or parsing failure: {e}") 
+        
+        return {
+            'status': status,
             'recommendations': random.sample(songs, min(3, len(songs)))
         }
